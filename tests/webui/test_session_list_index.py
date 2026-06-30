@@ -101,6 +101,7 @@ def test_webui_session_list_uses_webui_transcript_activity_for_sort(
     old_session.created_at = datetime(2026, 6, 15, 10, 0, 0)
     old_session.updated_at = datetime(2026, 6, 15, 10, 0, 0)
     old_session.add_message("user", "old metadata")
+    old_session.messages[-1]["timestamp"] = "2026-06-15T10:00:00"
     old_session.updated_at = datetime(2026, 6, 15, 10, 0, 0)
     manager.save(old_session)
 
@@ -108,6 +109,7 @@ def test_webui_session_list_uses_webui_transcript_activity_for_sort(
     newer_metadata.created_at = datetime(2026, 6, 15, 11, 0, 0)
     newer_metadata.updated_at = datetime(2026, 6, 15, 11, 0, 0)
     newer_metadata.add_message("user", "newer metadata")
+    newer_metadata.messages[-1]["timestamp"] = "2026-06-15T11:00:00"
     newer_metadata.updated_at = datetime(2026, 6, 15, 11, 0, 0)
     manager.save(newer_metadata)
 
@@ -141,6 +143,7 @@ def test_webui_session_list_rescans_when_transcript_changes(
     session.created_at = datetime(2026, 6, 15, 10, 0, 0)
     session.updated_at = datetime(2026, 6, 15, 10, 0, 0)
     session.add_message("user", "preview")
+    session.messages[-1]["timestamp"] = "2026-06-15T10:00:00"
     session.updated_at = datetime(2026, 6, 15, 10, 0, 0)
     manager.save(session)
 
@@ -169,5 +172,68 @@ def test_webui_session_list_rescans_when_transcript_changes(
     assert rows[0]["updated_at"].startswith("2026-06-15T12:30:00")
 
 
+def test_webui_session_list_sorts_by_message_activity_not_maintenance_timestamp(
+    tmp_path: Path,
+) -> None:
+    manager = SessionManager(tmp_path)
+    old = manager.get_or_create("websocket:old")
+    old.created_at = datetime(2026, 6, 1, 10, 0, 0)
+    old.add_message("user", "old first visible activity")
+    old.messages[-1]["timestamp"] = "2026-06-01T10:00:00"
+    old.add_message("assistant", "automation result")
+    old.messages[-1]["timestamp"] = "2026-06-05T10:00:00"
+    old.updated_at = datetime(2026, 6, 30, 17, 40, 0)
+    manager.save(old)
+
+    newer = manager.get_or_create("websocket:newer")
+    newer.created_at = datetime(2026, 6, 4, 10, 0, 0)
+    newer.add_message("user", "newer real activity")
+    newer.messages[-1]["timestamp"] = "2026-06-04T10:00:00"
+    newer.updated_at = datetime(2026, 6, 4, 10, 0, 0)
+    manager.save(newer)
+
+    rows = list_webui_sessions(manager)
+
+    assert [row["key"] for row in rows] == ["websocket:old", "websocket:newer"]
+    assert rows[0]["updated_at"] == "2026-06-05T10:00:00"
+
+
 def list_webui_sessions(manager: SessionManager) -> list[dict]:
     return session_list_index.list_webui_sessions(manager)
+
+
+def test_webui_session_list_fallback_time_when_missing(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path)
+    path = manager._get_session_path("websocket:missing-time")
+    path.write_text(
+        '{"_type": "metadata", "key": "websocket:missing-time"}\n'
+        '{"_type": "message", "role": "user", "content": "hello"}\n',
+        encoding="utf-8",
+    )
+
+    rows = list_webui_sessions(manager)
+    assert len(rows) == 1
+    assert rows[0]["key"] == "websocket:missing-time"
+    assert rows[0]["created_at"] is not None
+    assert rows[0]["updated_at"] is not None
+    datetime.fromisoformat(rows[0]["created_at"])
+    datetime.fromisoformat(rows[0]["updated_at"])
+
+
+def test_session_manager_list_sessions_fallback_time_when_missing(tmp_path: Path) -> None:
+    manager = SessionManager(tmp_path)
+    path = manager._get_session_path("websocket:missing-time2")
+    path.write_text(
+        '{"_type": "metadata", "key": "websocket:missing-time2"}\n'
+        '{"_type": "message", "role": "user", "content": "hello"}\n',
+        encoding="utf-8",
+    )
+
+    sessions = manager.list_sessions()
+    assert len(sessions) == 1
+    assert sessions[0]["key"] == "websocket:missing-time2"
+    assert sessions[0]["created_at"] is not None
+    assert sessions[0]["updated_at"] is not None
+    datetime.fromisoformat(sessions[0]["created_at"])
+    datetime.fromisoformat(sessions[0]["updated_at"])
+
